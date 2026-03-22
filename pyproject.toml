@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "superior-agent"
+version = "0.1.0"
+description = "A modular, session-aware AI agent with tiered reasoning, powered by Qwen3 via Ollama."
+requires-python = ">=3.11"
+dependencies = [
+    "ollama>=0.4",
+    "tiktoken>=0.7",
+    "rich>=13.7",
+    "prompt-toolkit>=3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "respx>=0.21",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
