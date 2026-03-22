@@ -9,7 +9,6 @@ from typing import Any, AsyncIterator
 import pytest
 
 from superior_agent.core.models import EventType, LLMEvent, Message
-from superior_agent.core.llm_bridge import ChatResponse, ToolCallResult
 from superior_agent.agent.brain import Brain, PlatformProfile, detect_platform, AgentState
 from superior_agent.agent.registry import Registry
 from superior_agent.agent.artifact_controller import ArtifactController
@@ -37,10 +36,9 @@ def artifact_ctrl(tmp_path: Path) -> ArtifactController:
 
 class MockLLM:
     """Fake LLM bridge."""
-    def __init__(self, tier_result=None, chat_result=None, stream_events=None):
+    def __init__(self, tier_result=None, stream_events=None):
         self.model = "test-model"
         self._tier = tier_result or {"tier": "trivial", "rationale": "simple", "requires_tool": False}
-        self._chat = chat_result or ChatResponse(content="Done.")
         self._stream = stream_events or [
             LLMEvent(type=EventType.RESPONSE_CHUNK, content="Hello!"),
             LLMEvent(type=EventType.DONE),
@@ -49,8 +47,9 @@ class MockLLM:
     async def one_shot(self, messages, **kw) -> dict:
         return self._tier
 
-    async def chat_with_tools(self, messages, tools, **kw) -> ChatResponse:
-        return self._chat
+    async def stream_chat_with_tools(self, messages, tools, **kw) -> AsyncIterator[LLMEvent]:
+        for ev in self._stream:
+            yield ev
 
     async def stream_response(self, messages, **kw) -> AsyncIterator[LLMEvent]:
         for ev in self._stream:
@@ -93,7 +92,6 @@ class TestBrainAgentic:
     @pytest.mark.asyncio
     async def test_agentic_path_with_tool(self, pprofile, artifact_ctrl):
         """When LLM returns tool calls, should enter agentic path."""
-        # First chat returns a tool call, second returns text
         call_count = 0
 
         class MockLLMWithTool:
@@ -101,15 +99,19 @@ class TestBrainAgentic:
             async def one_shot(self, messages, **kw):
                 return {"tier": "moderate", "rationale": "needs tool", "requires_tool": True}
 
-            async def chat_with_tools(self, messages, tools, **kw):
+            async def stream_chat_with_tools(self, messages, tools, **kw):
                 nonlocal call_count
                 call_count += 1
                 if call_count == 1:
-                    return ChatResponse(
-                        content="",
-                        tool_calls=[ToolCallResult(name="write_file", arguments={"path": "a.txt", "content": "hi"})]
+                    yield LLMEvent(
+                        type=EventType.TOOL_CALL,
+                        tool_name="write_file",
+                        tool_args={"path": "a.txt", "content": "hi"}
                     )
-                return ChatResponse(content="Created a.txt.")
+                    yield LLMEvent(type=EventType.DONE)
+                else:
+                    yield LLMEvent(type=EventType.RESPONSE_CHUNK, content="Created a.txt.")
+                    yield LLMEvent(type=EventType.DONE)
 
         brain = Brain(MockLLMWithTool(), Registry(), artifact_ctrl, pprofile)
         events = [ev async for ev in brain.decide("Create a file")]

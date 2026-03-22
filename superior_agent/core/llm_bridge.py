@@ -105,26 +105,21 @@ class LLMBridge:
             yield LLMEvent(type=EventType.ERROR, error=str(exc))
 
     # ------------------------------------------------------------------
-    # Non-streaming with tools (reliable tool-call detection)
+    # Streaming with tools (prevents UI freezing during long thoughts)
     # ------------------------------------------------------------------
 
-    async def chat_with_tools(
+    async def stream_chat_with_tools(
         self,
         messages: list[Message],
         tools: list[dict[str, Any]],
         *,
         enable_thinking: bool = False,
         options: dict[str, Any] | None = None,
-    ) -> ChatResponse:
-        """Non-streaming chat WITH tools. Returns parsed ChatResponse.
-
-        This is the reliable way to detect tool calls — streaming with
-        tools can hang or miss tool_calls in some ollama versions.
-        """
+    ) -> AsyncIterator[LLMEvent]:
         kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": [self._msg_to_dict(m) for m in messages],
-            "stream": False,
+            "stream": True,
             "think": enable_thinking,
         }
         if tools:
@@ -133,29 +128,35 @@ class LLMBridge:
             kwargs["options"] = options
 
         try:
-            resp = await self._client.chat(**kwargs)
-            message = resp.get("message", {})
+            response = await self._client.chat(**kwargs)
+            async for part in response:
+                message = part.get("message", {})
 
-            result = ChatResponse(
-                content=message.get("content", ""),
-                thinking=message.get("thinking", "") or "",
-            )
+                thinking = message.get("thinking")
+                if thinking:
+                    yield LLMEvent(type=EventType.THINKING_CHUNK, content=thinking)
 
-            # Parse tool calls
-            raw_calls = message.get("tool_calls")
-            if raw_calls:
-                for tc in raw_calls:
-                    fn = tc.get("function", {})
-                    result.tool_calls.append(ToolCallResult(
-                        name=fn.get("name", ""),
-                        arguments=fn.get("arguments", {}),
-                    ))
+                content = message.get("content")
+                if content:
+                    yield LLMEvent(type=EventType.RESPONSE_CHUNK, content=content)
 
-            return result
+                # Tool calls might arrive in any chunk (often the last)
+                tool_calls = message.get("tool_calls")
+                if tool_calls:
+                    for tc in tool_calls:
+                        fn = tc.get("function", {})
+                        yield LLMEvent(
+                            type=EventType.TOOL_CALL,
+                            tool_name=fn.get("name", ""),
+                            tool_args=fn.get("arguments", {}),
+                        )
+
+                if part.get("done", False):
+                    yield LLMEvent(type=EventType.DONE)
 
         except Exception as exc:  # noqa: BLE001
-            logger.error("chat_with_tools failed: %s", exc)
-            return ChatResponse(content=f"[Error: {exc}]")
+            logger.error("stream_chat_with_tools failed: %s", exc)
+            yield LLMEvent(type=EventType.ERROR, error=str(exc))
 
     # ------------------------------------------------------------------
     # One-shot structured JSON (classifications, decisions)

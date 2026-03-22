@@ -2,6 +2,7 @@ ollama>=0.4
 tiktoken>=0.7
 rich>=13.7
 prompt-toolkit>=3.0
+textual>=0.45
 
 [dev]
 pytest>=8.0

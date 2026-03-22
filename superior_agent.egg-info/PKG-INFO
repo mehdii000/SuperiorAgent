@@ -7,6 +7,7 @@ Requires-Dist: ollama>=0.4
 Requires-Dist: tiktoken>=0.7
 Requires-Dist: rich>=13.7
 Requires-Dist: prompt-toolkit>=3.0
+Requires-Dist: textual>=0.45
 Provides-Extra: dev
 Requires-Dist: pytest>=8.0; extra == "dev"
 Requires-Dist: pytest-asyncio>=0.23; extra == "dev"

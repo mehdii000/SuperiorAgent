@@ -83,42 +83,43 @@ async def test_stream_response_error():
 
 
 # ------------------------------------------------------------------
-# chat_with_tools (non-streaming)
+# stream_chat_with_tools
 # ------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_chat_with_tools_text_response():
+async def test_stream_chat_with_tools_text_response():
     bridge = LLMBridge(model="test")
     bridge._client = MagicMock()
-    bridge._client.chat = AsyncMock(return_value={
-        "message": {"content": "I created the file.", "tool_calls": None},
-        "done": True,
-    })
+    bridge._client.chat = AsyncMock(return_value=_fake_stream(
+        {"message": {"content": "I created the file."}, "done": True}
+    ))
 
-    resp = await bridge.chat_with_tools([_msg("user", "create file")], [])
-    assert resp.content == "I created the file."
-    assert not resp.has_tool_calls
+    events = []
+    async for ev in bridge.stream_chat_with_tools([_msg("user", "create file")], []):
+        events.append(ev)
+
+    responses = [e for e in events if e.type == EventType.RESPONSE_CHUNK]
+    assert len(responses) == 1
+    assert responses[0].content == "I created the file."
+    assert not any(e.type == EventType.TOOL_CALL for e in events)
 
 
 @pytest.mark.asyncio
-async def test_chat_with_tools_tool_call():
+async def test_stream_chat_with_tools_tool_call():
     bridge = LLMBridge(model="test")
     bridge._client = MagicMock()
-    bridge._client.chat = AsyncMock(return_value={
-        "message": {
-            "content": "",
-            "tool_calls": [{
-                "function": {"name": "write_file", "arguments": {"path": "test.txt", "content": "hello"}}
-            }],
-        },
-        "done": True,
-    })
+    bridge._client.chat = AsyncMock(return_value=_fake_stream(
+        {"message": {"tool_calls": [{"function": {"name": "write_file", "arguments": {"path": "test.txt", "content": "hello"}}}]}, "done": True}
+    ))
 
-    resp = await bridge.chat_with_tools([_msg("user", "create file")], [{"type": "function"}])
-    assert resp.has_tool_calls
-    assert len(resp.tool_calls) == 1
-    assert resp.tool_calls[0].name == "write_file"
-    assert resp.tool_calls[0].arguments["path"] == "test.txt"
+    events = []
+    async for ev in bridge.stream_chat_with_tools([_msg("user", "create file")], [{"type": "function"}]):
+        events.append(ev)
+
+    tool_events = [e for e in events if e.type == EventType.TOOL_CALL]
+    assert len(tool_events) == 1
+    assert tool_events[0].tool_name == "write_file"
+    assert tool_events[0].tool_args["path"] == "test.txt"
 
 
 # ------------------------------------------------------------------

@@ -93,7 +93,7 @@ class AgentState(enum.Enum):
 _TIER_CONFIGS: dict[Tier, dict[str, Any]] = {
     Tier.TRIVIAL: {"options": {"temperature": 0.7, "top_k": 20}, "enable_thinking": False},
     Tier.MODERATE: {"options": {"temperature": 0.6, "top_p": 0.95}, "enable_thinking": False},
-    Tier.COMPLEX: {"options": {"temperature": 0.6, "top_p": 0.95}, "enable_thinking": False},
+    Tier.COMPLEX: {"options": {"temperature": 0.6, "top_p": 0.95}, "enable_thinking": True  },
 }
 
 _TIER_SCHEMA = {
@@ -122,6 +122,7 @@ class Brain:
         self.platform = platform_profile
         self.memory = SessionMemory()
         self.state = AgentState.IDLE
+        self.active_tools: set[str] = {"read_file", "write_file", "run_shell", "list_directory", "search_tools"}
 
     # ------------------------------------------------------------------
     # Public API
@@ -180,60 +181,62 @@ class Brain:
     async def _handle_agentic(self, user_input: str, decision: TierDecision) -> AsyncIterator[LLMEvent]:
         cfg = _TIER_CONFIGS[decision.tier]
         messages = self._build_messages(user_input)
-        tools_schemas = self._get_tool_schemas()
 
         for round_num in range(_MAX_TOOL_ROUNDS):
-            # --- Call LLM (non-streaming, with tools) ---
+            tools_schemas = self._get_tool_schemas()
+            # --- Call LLM (streaming, with tools) ---
             self._set_state(AgentState.CALLING_LLM)
             yield LLMEvent(
-                type=EventType.STATE_CHANGE,
+                type=EventType.STATE_CHANGE,    
                 new_state="calling_llm",
                 content=f"Round {round_num+1}: calling LLM with {len(tools_schemas)} tools…",
             )
 
-            chat_resp = await self.llm.chat_with_tools(
+            response_text = ""
+            tool_calls = []
+
+            async for ev in self.llm.stream_chat_with_tools(
                 messages, tools_schemas,
                 enable_thinking=cfg["enable_thinking"],
                 options=cfg["options"],
-            )
-
-            # Emit thinking if present
-            if chat_resp.thinking:
-                yield LLMEvent(type=EventType.THINKING_CHUNK, content=chat_resp.thinking)
+            ):
+                if ev.type == EventType.RESPONSE_CHUNK:
+                    response_text += ev.content
+                    yield ev
+                elif ev.type == EventType.THINKING_CHUNK:
+                    yield ev
+                elif ev.type == EventType.TOOL_CALL:
+                    tool_calls.append(ev)
+                elif ev.type == EventType.ERROR:
+                    yield ev
 
             # --- No tool calls → we have the final response ---
-            if not chat_resp.has_tool_calls:
-                if chat_resp.content:
-                    yield LLMEvent(type=EventType.RESPONSE_CHUNK, content=chat_resp.content)
-                self.memory.add("agent", chat_resp.content)
+            if not tool_calls:
+                self.memory.add("agent", response_text)
                 yield LLMEvent(type=EventType.DONE)
                 return
 
             # --- Tool calls detected → execute them ---
-            # Show any text the LLM produced alongside the tool calls
-            if chat_resp.content:
-                yield LLMEvent(type=EventType.RESPONSE_CHUNK, content=chat_resp.content)
-
             # Build assistant message WITH tool_calls for conversation history
             tool_calls_for_msg = []
-            for tc in chat_resp.tool_calls:
+            for tc in tool_calls:
                 tool_calls_for_msg.append({
-                    "function": {"name": tc.name, "arguments": tc.arguments}
+                    "function": {"name": tc.tool_name, "arguments": tc.tool_args}
                 })
             messages.append(Message(
                 role="assistant",
-                content=chat_resp.content,
+                content=response_text,
                 tool_calls=tool_calls_for_msg,
             ))
 
             # Execute each tool
-            for tc in chat_resp.tool_calls:
+            for tc in tool_calls:
                 # Announce the call
                 self._set_state(AgentState.TOOL_CALL)
                 yield LLMEvent(
                     type=EventType.TOOL_CALL,
-                    tool_name=tc.name,
-                    tool_args=tc.arguments,
+                    tool_name=tc.tool_name,
+                    tool_args=tc.tool_args,
                     content="",  # empty = call announcement
                 )
 
@@ -242,24 +245,24 @@ class Brain:
                 yield LLMEvent(
                     type=EventType.STATE_CHANGE,
                     new_state="tool_exec",
-                    content=f"Executing {tc.name}({', '.join(f'{k}={v!r}' for k,v in tc.arguments.items())})…",
+                    content=f"Executing {tc.tool_name}({', '.join(f'{k}={v!r}' for k,v in tc.tool_args.items())})…",
                 )
 
                 t0 = time.time()
-                result = await self._execute_tool_call(tc.name, tc.arguments)
+                result = await self._execute_tool_call(tc.tool_name, tc.tool_args)
                 elapsed = time.time() - t0
 
                 # Emit the result
                 yield LLMEvent(
                     type=EventType.TOOL_CALL,
-                    tool_name=tc.name,
-                    tool_args=tc.arguments,
+                    tool_name=tc.tool_name,
+                    tool_args=tc.tool_args,
                     content=result,  # non-empty = result
                     tool_call_id=f"{elapsed:.2f}s",  # reuse field for timing
                 )
 
                 # Add tool result to messages
-                messages.append(Message(role="tool", content=result, name=tc.name))
+                messages.append(Message(role="tool", content=result, name=tc.tool_name))
 
             # Loop → next round (LLM sees tool results)
 
@@ -274,8 +277,11 @@ class Brain:
     # Tool helpers
     # ------------------------------------------------------------------
 
+    def _get_active_tool_metadata(self):
+        return [t for t in self.registry.list_all() if t.name in self.active_tools]
+
     def _get_tool_schemas(self) -> list[dict[str, Any]]:
-        return [meta.to_openai_schema() for meta in self.registry.list_all()]
+        return [meta.to_openai_schema() for meta in self._get_active_tool_metadata()]
 
     async def _execute_tool_call(self, name: str, arguments: dict[str, Any]) -> str:
         try:
@@ -289,11 +295,21 @@ class Brain:
             kwargs["workdir"] = self.platform.work_dir
         if "platform_profile" in sig.parameters:
             kwargs["platform_profile"] = self.platform.to_dict()
+        if "registry" in sig.parameters:
+            kwargs["registry"] = self.registry
 
         try:
-            result = func(**kwargs)
-            if asyncio.iscoroutine(result):
-                result = await result
+            if inspect.iscoroutinefunction(func):
+                result = await func(**kwargs)
+            else:
+                result = await asyncio.to_thread(func, **kwargs)
+                
+            # Intercept search_tools to auto-activate the discovered tools
+            if name == "search_tools":
+                found = self.registry.search(arguments.get("query", ""))
+                for t in found:
+                    self.active_tools.add(t.name)
+                    
             return str(result)
         except Exception as exc:  # noqa: BLE001
             return f"Tool error: {exc}"
@@ -314,8 +330,9 @@ class Brain:
                 "- 'moderate': 1-3 steps, likely needs tools\n"
                 "- 'complex': multi-step, definitely needs tools and planning\n"
                 "- ANY request involving files, directories, or system commands → requires_tool=true\n"
+                "- ANY request for real-time information (time, weather, search) → requires_tool=true\n"
                 "- Only pure questions with no action → requires_tool=false\n\n"
-                f"Available tools: {tool_names}"
+                f"Available core tools: {tool_names} (Note: Agent can search for more tools if needed)"
             )),
             Message(role="user", content=user_input),
         ]
@@ -342,7 +359,7 @@ class Brain:
         return msgs
 
     def _system_prompt(self) -> str:
-        tool_list = self.registry.list_all()
+        tool_list = self._get_active_tool_metadata()
         tool_desc = "\n".join(f"  - {t.name}: {t.description}" for t in tool_list) or "  (none)"
 
         return (
@@ -350,12 +367,13 @@ class Brain:
             "## CRITICAL RULES\n"
             "1. You are an AGENT. When asked to do something, DO IT with tools. "
             "Never ask for confirmation.\n"
-            "2. After completing tool calls, write a brief summary of what you did.\n"
-            "3. Do NOT call the same tool twice with identical arguments.\n\n"
+            "2. **IMPORTANTE**: You do NOT have all tools loaded by default. If you need a tool to accomplish a task (e.g., getting the time, weather, web search, git, math) and you don't see it in your core Tools list below, you MUST use the `search_tools` function to find and activate it. Do NOT say 'I cannot do that' until you have tried `search_tools`.\n"
+            "3. After completing tool calls, write a brief summary of what you did.\n"
+            "4. Do NOT call the same tool twice with identical arguments.\n\n"
             f"## Environment\n"
             f"- OS: {self.platform.os_name} | Shell: {self.platform.shell}\n"
             f"- Working directory: {self.platform.work_dir}\n\n"
-            f"## Tools\n{tool_desc}\n\n"
+            f"## Currently Active Tools\n{tool_desc}\n\n"
             "All paths are relative to working directory unless absolute.\n"
         )
 

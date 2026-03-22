@@ -44,7 +44,7 @@ class ToolMetadata:
         Parameters marked in *exclude_internal* (e.g. ``{"workdir", "platform_profile"}``)
         are omitted from the schema — these are injected by the agent, not by the LLM.
         """
-        exclude = exclude_internal or {"workdir", "platform_profile"}
+        exclude = exclude_internal or {"workdir", "platform_profile", "registry"}
         properties: dict[str, Any] = {}
         required: list[str] = []
         for pname, pdesc in self.args.items():
