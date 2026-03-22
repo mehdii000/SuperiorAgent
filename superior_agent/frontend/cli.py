@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any
 
 from rich.console import RenderableType
@@ -38,6 +39,13 @@ _STATE_ICONS = {
     "tool_exec":   ("⚡", "EXECUTING  "),
     "idle":        ("✅", "IDLE       "),
 }
+
+def strip_ansi(text: str) -> str:
+    """Strip ANSI escape codes and control characters."""
+    ansi_escape = re.compile(r'(?:\x1B[@-_]|[\x80-\x9F])[0-?]*[ -/]*[@-~]')
+    text = ansi_escape.sub('', text)
+    # Also strip some common control characters that might break Textual
+    return "".join(ch for ch in text if ch == '\n' or (ord(ch) >= 32 and ord(ch) != 127))
 
 
 class ChatMessage(Static):
@@ -134,6 +142,23 @@ class AgentApp(App):
         padding: 1 2;
         margin: 1 0;
     }
+    
+    .sidebar_header {
+        color: $accent;
+        text-style: bold;
+        margin-top: 1;
+        margin-bottom: 0;
+    }
+    
+    .sidebar_sep {
+        color: $primary-background-lighten-2;
+        margin: 1 0;
+    }
+
+    #process_list {
+        color: $text-muted;
+        padding-left: 1;
+    }
     """
 
     def __init__(self, brain: Any, artifact_ctrl: Any) -> None:
@@ -153,9 +178,13 @@ class AgentApp(App):
                 yield Static("✅ IDLE", id="status_bar")
                 yield Input(placeholder="Ask Superior Agent... (type /help for commands)", id="chat_input")
                 
-            # Sidebar for Artifacts/Plan
+            # Sidebar for Artifacts/Plan/Processes
             with Vertical(id="sidebar"):
-                yield TMarkdown("# Tasks / Plan\n_No tasks or plans yet._", id="sidebar_content")
+                with VerticalScroll(id="sidebar_scroll"):
+                    yield Static("BACKGROUND PROCESSES", classes="sidebar_header")
+                    yield Static("_None_", id="process_list")
+                    yield Static("\n---\n", classes="sidebar_sep")
+                    yield TMarkdown("# Tasks / Plan\n_No tasks or plans yet._", id="sidebar_content")
                 
         yield Footer()
 
@@ -163,6 +192,10 @@ class AgentApp(App):
         self.query_one("#chat_input").focus()
         self._append_message("banner", self._get_banner_panel())
         self._update_sidebar()
+
+    async def on_unmount(self) -> None:
+        """Cleanup before exiting."""
+        await self.brain.cleanup()
 
     def _get_banner_panel(self) -> Panel:
         pp = self.brain.platform
@@ -202,10 +235,22 @@ class AgentApp(App):
                 md_text += legacy_plan
             
         if not md_text:
-            md_text = "*No tasks or plans available.*"
+            md_text = "*No active tasks or plans.*"
             
         sidebar = self.query_one("#sidebar_content", TMarkdown)
         sidebar.update(md_text)
+
+        # Update process list
+        proc_list = self.query_one("#process_list", Static)
+        if not self.brain.processes:
+            proc_list.update("_None_")
+        else:
+            lines = []
+            for pid, cmd in self.brain.processes.items():
+                # Shorten command if too long
+                display_cmd = cmd[:30] + "..." if len(cmd) > 30 else cmd
+                lines.append(f"• [bold cyan]{pid}[/bold cyan]: {display_cmd}")
+            proc_list.update("\n".join(lines))
 
     async def on_input_submitted(self, message: Input.Submitted) -> None:
         text = message.value.strip()
@@ -288,15 +333,16 @@ class AgentApp(App):
             else:
                 # the result
                 elapsed_str = ev.tool_call_id or ""
-                result = ev.content
-                if len(result) > 500:
-                    result = result[:500] + "\n...(truncated)"
+                result = strip_ansi(ev.content)
+                if len(result) > 1000:
+                    result = result[:1000] + "\n...(truncated)"
                     
                 panel = Panel(
                     result,
                     title=f"⚡ {ev.tool_name} Result ({elapsed_str})",
                     border_style="yellow",
-                    padding=(0, 1)
+                    padding=(0, 1),
+                    expand=False
                 )
                 self._append_message("tool", panel)
                 

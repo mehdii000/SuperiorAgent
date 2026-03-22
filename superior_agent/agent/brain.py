@@ -123,7 +123,13 @@ class Brain:
         self.memory = SessionMemory()
         self.state = AgentState.IDLE
         self.max_tool_rounds = _MAX_TOOL_ROUNDS
-        self.active_tools: set[str] = {"read_file", "write_file", "edit_file", "run_shell", "list_directory", "search_tools", "update_artifact", "increase_max_rounds"}
+        self.processes: dict[int, dict[str, Any]] = {} # pid -> {command, process}
+        self.active_tools: set[str] = {
+            "read_file", "write_file", "edit_file", "run_shell", 
+            "list_directory", "search_tools", "update_artifact", 
+            "increase_max_rounds", "list_processes", "stop_process",
+            "get_session_info"
+        }
 
     # ------------------------------------------------------------------
     # Public API
@@ -156,6 +162,27 @@ class Brain:
     def reset(self) -> None:
         self.memory.clear()
         self.state = AgentState.IDLE
+
+    async def cleanup(self) -> None:
+        """Terminate all background processes."""
+        if not self.processes:
+            return
+        
+        logger.info("Cleaning up %d background process(es)...", len(self.processes))
+        for pid, info in list(self.processes.items()):
+            proc = info.get("process")
+            if proc and proc.returncode is None:
+                try:
+                    proc.terminate()
+                    # Wait briefly for termination
+                    try:
+                        await asyncio.wait_for(proc.wait(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        proc.kill()
+                        await proc.wait()
+                except Exception as e:
+                    logger.warning("Error terminating process %d: %s", pid, e)
+        self.processes.clear()
 
     # ------------------------------------------------------------------
     # Trivial handler — stream text, no tools

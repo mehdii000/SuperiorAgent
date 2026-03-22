@@ -43,7 +43,7 @@ class ToolMetadata:
                 w in self.name.lower()
                 or w in self.description.lower()
                 or w in self.when_to_use.lower()
-                or w in self.tags
+                or any(w in tag for tag in self.tags)
                 or any(w in v.lower() for v in self.args.values())
             )
             
@@ -158,7 +158,7 @@ class Registry:
             return None
 
         for node in ast.walk(tree):
-            if not isinstance(node, ast.FunctionDef):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             if node.name.startswith("_"):
                 continue

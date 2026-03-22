@@ -15,12 +15,16 @@ superior_agent/agent/tools/__init__.py
 superior_agent/agent/tools/edit_file.py
 superior_agent/agent/tools/evaluate_math.py
 superior_agent/agent/tools/get_current_time.py
+superior_agent/agent/tools/get_session_info.py
 superior_agent/agent/tools/get_weather.py
+superior_agent/agent/tools/increase_max_rounds.py
 superior_agent/agent/tools/list_directory.py
+superior_agent/agent/tools/list_processes.py
 superior_agent/agent/tools/read_file.py
 superior_agent/agent/tools/run_shell.py
 superior_agent/agent/tools/search_tools.py
 superior_agent/agent/tools/search_wikipedia.py
+superior_agent/agent/tools/stop_process.py
 superior_agent/agent/tools/update_artifact.py
 superior_agent/agent/tools/write_file.py
 superior_agent/core/__init__.py
