@@ -8,6 +8,7 @@ def search_wikipedia(query: str) -> str:
     Args: query: The topic to search for on Wikipedia.
     Returns: A short summary of the Wikipedia article.
     When to use: When the user asks for factual information, history, or a summary of a specific topic, person, or event.
+    Tags: search, internet, web, data, information, wiki
     """
     q = urllib.parse.quote(query)
     url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{q}"

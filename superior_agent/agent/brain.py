@@ -92,8 +92,8 @@ class AgentState(enum.Enum):
 
 _TIER_CONFIGS: dict[Tier, dict[str, Any]] = {
     Tier.TRIVIAL: {"options": {"temperature": 0.7, "top_k": 20}, "enable_thinking": False},
-    Tier.MODERATE: {"options": {"temperature": 0.6, "top_p": 0.95}, "enable_thinking": False},
-    Tier.COMPLEX: {"options": {"temperature": 0.6, "top_p": 0.95}, "enable_thinking": False},
+    Tier.MODERATE: {"options": {"temperature": 0.5, "top_p": 0.95}, "enable_thinking": True},
+    Tier.COMPLEX: {"options": {"temperature": 0.5, "top_p": 0.95}, "enable_thinking": True},
 }
 
 _TIER_SCHEMA = {
@@ -106,7 +106,7 @@ _TIER_SCHEMA = {
     "required": ["tier", "rationale", "requires_tool"],
 }
 
-_MAX_TOOL_ROUNDS = 10
+_MAX_TOOL_ROUNDS = 20
 
 
 # ------------------------------------------------------------------
@@ -122,7 +122,8 @@ class Brain:
         self.platform = platform_profile
         self.memory = SessionMemory()
         self.state = AgentState.IDLE
-        self.active_tools: set[str] = {"read_file", "write_file", "edit_file", "run_shell", "list_directory", "search_tools", "update_artifact"}
+        self.max_tool_rounds = _MAX_TOOL_ROUNDS
+        self.active_tools: set[str] = {"read_file", "write_file", "edit_file", "run_shell", "list_directory", "search_tools", "update_artifact", "increase_max_rounds"}
 
     # ------------------------------------------------------------------
     # Public API
@@ -181,15 +182,16 @@ class Brain:
     async def _handle_agentic(self, user_input: str, decision: TierDecision) -> AsyncIterator[LLMEvent]:
         cfg = _TIER_CONFIGS[decision.tier]
         messages = self._build_messages(user_input)
-
-        for round_num in range(_MAX_TOOL_ROUNDS):
+        
+        round_num = 0
+        while round_num < self.max_tool_rounds:
             tools_schemas = self._get_tool_schemas()
             # --- Call LLM (streaming, with tools) ---
             self._set_state(AgentState.CALLING_LLM)
             yield LLMEvent(
                 type=EventType.STATE_CHANGE,    
                 new_state="calling_llm",
-                content=f"Round {round_num+1}/{_MAX_TOOL_ROUNDS}: calling LLM with {len(tools_schemas)} tools…",
+                content=f"Round {round_num+1}/{self.max_tool_rounds}: calling LLM with {len(tools_schemas)} tools…",
             )
 
             response_text = ""
@@ -264,6 +266,7 @@ class Brain:
                 # Add tool result to messages
                 messages.append(Message(role="tool", content=result, name=tc.tool_name))
 
+            round_num += 1
             # Loop → next round (LLM sees tool results)
 
         # Max rounds exhausted
@@ -299,6 +302,8 @@ class Brain:
             kwargs["registry"] = self.registry
         if "artifacts" in sig.parameters:
             kwargs["artifacts"] = self.artifacts
+        if "brain" in sig.parameters:
+            kwargs["brain"] = self
 
         try:
             if inspect.iscoroutinefunction(func):

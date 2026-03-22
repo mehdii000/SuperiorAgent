@@ -32,6 +32,7 @@ superior_agent/frontend/cli.py
 superior_agent/frontend/themes.py
 tests/test_artifact_controller.py
 tests/test_brain.py
+tests/test_enhanced_tools.py
 tests/test_llm_bridge.py
 tests/test_memory.py
 tests/test_registry.py

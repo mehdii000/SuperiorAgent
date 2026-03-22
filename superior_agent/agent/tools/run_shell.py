@@ -6,11 +6,19 @@ import subprocess
 from typing import Any
 
 
-def run_shell(command: str, workdir: str, platform_profile: dict[str, Any]) -> str:
-    """Description: Executes a shell command in the working directory and returns the output.
-    Args: command: The shell command to execute  workdir: Working directory for the command  platform_profile: OS profile dictionary with shell info
-    Returns: Combined stdout and stderr output from the command
-    When to use: When the user needs to run a system command, install packages, or execute scripts"""
+def run_shell(
+    command: str,
+    workdir: str,
+    platform_profile: dict[str, Any],
+    timeout: int = 60,
+    max_output_length: int = 10000,
+) -> str:
+    """Description: Executes a shell command and returns the output (truncated if too long).
+    Args: command: The shell command to execute  workdir: Working directory  platform_profile: OS profile  timeout: Timeout in seconds (default 60)  max_output_length: Max characters to return (default 10000)
+    Returns: stdout and stderr output
+    When to use: Use for system commands, builds, or scripts. Avoid interactive commands."""
+    timeout = int(timeout)
+    max_output_length = int(max_output_length)
     shell_cmd = _build_shell_cmd(command, platform_profile)
     try:
         result = subprocess.run(
@@ -18,7 +26,7 @@ def run_shell(command: str, workdir: str, platform_profile: dict[str, Any]) -> s
             cwd=workdir,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=timeout,
             shell=True,
         )
         output = ""
@@ -26,11 +34,17 @@ def run_shell(command: str, workdir: str, platform_profile: dict[str, Any]) -> s
             output += result.stdout
         if result.stderr:
             output += ("\n--- stderr ---\n" + result.stderr) if output else result.stderr
+        
+        # Check for truncation
+        if len(output) > max_output_length:
+            header = f"--- Output Truncated ({len(output)} chars total, showing first {max_output_length}) ---\n"
+            output = header + output[:max_output_length] + "\n... (truncated)"
+
         if result.returncode != 0:
             output += f"\n[exit code: {result.returncode}]"
         return output.strip() or "(no output)"
     except subprocess.TimeoutExpired:
-        return "Error: command timed out after 60 seconds."
+        return f"Error: command timed out after {timeout} seconds."
     except Exception as exc:  # noqa: BLE001
         return f"Error running command: {exc}"
 

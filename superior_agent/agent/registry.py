@@ -27,16 +27,31 @@ class ToolMetadata:
     args: dict[str, str] = field(default_factory=dict)
     returns: str = ""
     when_to_use: str = ""
+    tags: set[str] = field(default_factory=set)
 
     def matches(self, query: str) -> bool:
-        """Case-insensitive keyword match against name, description, when_to_use."""
-        q = query.lower()
-        return (
-            q in self.name.lower()
-            or q in self.description.lower()
-            or q in self.when_to_use.lower()
-            or any(q in v.lower() for v in self.args.values())
-        )
+        """Case-insensitive keyword match against name, description, tags, etc.
+        
+        Supports multi-word queries where any word can match different parts of metadata.
+        """
+        q_words = query.lower().split()
+        if not q_words:
+            return False
+            
+        def _check_word(w: str) -> bool:
+            return (
+                w in self.name.lower()
+                or w in self.description.lower()
+                or w in self.when_to_use.lower()
+                or w in self.tags
+                or any(w in v.lower() for v in self.args.values())
+            )
+            
+        # For "semantic" feel, we return true if ALL words in the query match SOME part of the tool metadata
+        # (This is better than "any" because it reduces noise, but "any" is more forgiving).
+        # The user said "sometimes the agent looks for general queries like search internet".
+        # If I have 'search_wikipedia', 'search' is in name, 'internet' might be in tags.
+        return all(_check_word(w) for w in q_words)
 
     def to_openai_schema(self, exclude_internal: set[str] | None = None) -> dict[str, Any]:
         """Generate an OpenAI-compatible function tool definition.
@@ -155,6 +170,9 @@ class Registry:
             when = _extract_field(doc, "When to use")
 
             args = _parse_args_block(args_raw)
+            tags = set(_extract_field(doc, "Tags").lower().split(",")) if "Tags" in doc else set()
+            # Clean up empty strings from tags
+            tags = {t.strip() for t in tags if t.strip()}
 
             # Build dotted module path from file path
             # e.g.  .../superior_agent/agent/tools/read_file.py
@@ -174,6 +192,7 @@ class Registry:
                 args=args,
                 returns=returns,
                 when_to_use=when,
+                tags=tags,
             )
         return None
 

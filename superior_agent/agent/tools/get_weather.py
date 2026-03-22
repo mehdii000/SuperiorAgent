@@ -7,6 +7,7 @@ def get_weather(location: str) -> str:
     Args: location: The city or location name (e.g., 'London', 'San Francisco', 'Paris').
     Returns: The current weather conditions as a string.
     When to use: When the user asks 'what is the weather like in [location]?'.
+    Tags: weather, climate, forecast, temperature, rain, snow
     """
     loc = urllib.parse.quote(location)
     url = f"https://wttr.in/{loc}?format=3"
