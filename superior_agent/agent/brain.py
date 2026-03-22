@@ -33,6 +33,7 @@ from superior_agent.core.models import (
 )
 
 from .memory import MemoryEntry, SessionMemory
+from superior_agent.core.templates import TEMPLATES
 
 logger = logging.getLogger(__name__)
 
@@ -124,12 +125,8 @@ class Brain:
         self.state = AgentState.IDLE
         self.max_tool_rounds = _MAX_TOOL_ROUNDS
         self.processes: dict[int, dict[str, Any]] = {} # pid -> {command, process}
-        self.active_tools: set[str] = {
-            "read_file", "write_file", "edit_file", "run_shell", 
-            "list_directory", "search_tools", "update_artifact", 
-            "increase_max_rounds", "list_processes", "stop_process",
-            "get_session_info"
-        }
+        self.current_template = "General"
+        self.active_tools: set[str] = set(TEMPLATES[self.current_template].initial_tools)
 
     # ------------------------------------------------------------------
     # Public API
@@ -162,6 +159,16 @@ class Brain:
     def reset(self) -> None:
         self.memory.clear()
         self.state = AgentState.IDLE
+        self.active_tools = set(TEMPLATES[self.current_template].initial_tools)
+
+    def switch_template(self, name: str) -> bool:
+        """Switch to a different agent template."""
+        if name not in TEMPLATES:
+            return False
+        self.current_template = name
+        # Reset tools to template defaults
+        self.active_tools = set(TEMPLATES[name].initial_tools)
+        return True
 
     async def cleanup(self) -> None:
         """Terminate all background processes."""
@@ -393,11 +400,12 @@ class Brain:
         return msgs
 
     def _system_prompt(self) -> str:
+        tpl = TEMPLATES[self.current_template]
         tool_list = self._get_active_tool_metadata()
         tool_desc = "\n".join(f"  - {t.name}: {t.description}" for t in tool_list) or "  (none)"
 
         return (
-            "You are Superior Agent, an autonomous AI assistant.\n\n"
+            f"{tpl.system_prompt_prefix}\n\n"
             "## CRITICAL RULES\n"
             "1. You are an AGENT. When asked to do something, DO IT with tools. "
             "Never ask for confirmation.\n"

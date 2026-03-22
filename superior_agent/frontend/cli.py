@@ -26,6 +26,7 @@ from textual.widgets import Header, Footer, Input, Static, Markdown as TMarkdown
 from textual import work
 
 from superior_agent.core.models import EventType, LLMEvent
+from superior_agent.core.templates import TEMPLATES
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +205,7 @@ class AgentApp(App):
         t.add_column("V", style="bold cyan")
         t.add_row("  OS", pp.os_name)
         t.add_row("  Shell", pp.shell)
+        t.add_row("  Mode", self.brain.current_template, style="bold yellow")
         t.add_row("  Model", self.brain.llm.model)
         t.add_row("  Workdir", pp.work_dir)
 
@@ -375,6 +377,7 @@ class AgentApp(App):
 - `/tools`: List tools
 - `/memory`: Show recent memory
 - `/artifacts`: List artifacts
+- `/template <name>`: Switch agent template (General, Coding, Research)
 """
             self._append_message("agent_response", Markdown(help_md))
             
@@ -413,6 +416,25 @@ class AgentApp(App):
                 self._append_message("agent_response", Text("No artifacts."))
             else:
                 self._append_message("agent_response", Text(f"Artifacts: {', '.join(names)}"))
+                
+        elif c == "/template":
+            parts = cmd.split()
+            if len(parts) < 2:
+                available = ", ".join(TEMPLATES.keys())
+                self._append_message("agent_response", Text(f"Current template: {self.brain.current_template}\nAvailable templates: {available}", style="cyan"))
+                return
+            
+            new_tpl = parts[1]
+            # Try to match case-insensitively
+            matched = next((k for k in TEMPLATES if k.lower() == new_tpl.lower()), None)
+            if matched:
+                self.brain.switch_template(matched)
+                self._append_message("agent_response", Text(f"✓ Switched to {matched} template.", style="bold green"))
+                self._append_message("state", Text(f"System Prompt and Tools updated for {matched} mode.", style="dim italic"))
+                # Redraw banner to show new mode
+                banner_msg = self._append_message("banner", self._get_banner_panel())
+            else:
+                self._append_message("error", Text(f"Unknown template: {new_tpl}"))
         else:
             self._append_message("error", Text(f"Unknown command: {cmd}"))
 
