@@ -1,6 +1,6 @@
 # Superior Agent 🧠
 
-Superior Agent is a modular, session-aware AI agent designed with tiered reasoning, powered by **Qwen3** via **Ollama**. This is a fun hobbyist project exploring the capabilities of autonomous agents in a controlled environment.
+Superior Agent is a modular, session-aware AI agent designed with tiered reasoning, powered by **Qwen3/Qwen3.5** via **Ollama**. This is a fun hobbyist project exploring the capabilities of autonomous agents in a controlled environment.
 
 ## ✨ Key Features
 
@@ -29,6 +29,7 @@ def get_current_time() -> str:
     """Description: Retrieves the current local date and time.
     Returns: The current date and time as a string.
     When to use: When the user asks for the current time or date.
+    Tags: time, date, current, clock, now (optional)
     """
     now = datetime.datetime.now()
     return now.strftime("%Y-%m-%d %H:%M:%S")
@@ -65,10 +66,11 @@ python -m superior_agent
 ```
 
 #### Running Locally (Ollama)
-Ensure you have [Ollama](https://ollama.ai/) installed and running. By default, the agent looks for Ollama at `http://localhost:11434` and uses the `qwen3:latest` model.
+Ensure you have [Ollama](https://ollama.ai/) installed and running. By default, the agent looks for Ollama at `http://localhost:11434` and uses the `qwen3:latest` model. but it's best to use `qwen3.5` even in low parameter count (0.8/2/4b) it's way better than qwen3.
 
 #### Running via Cloud
 If you want to use a cloud-hosted Ollama-compatible API:
+NOTE: This uses the x-api-key header for authentication. which is not supported by ollama, instead its a wrapper around ollama that you probably will have to code yourself.
 ```bash
 python -m superior_agent --ollama-url https://your-cloud-api.com --apikey YOUR_API_KEY
 ```
@@ -77,7 +79,7 @@ python -m superior_agent --ollama-url https://your-cloud-api.com --apikey YOUR_A
 
 | Argument | Description | Default |
 | :--- | :--- | :--- |
-| `--model` | Preferred Ollama model tag | `qwen3:latest` |
+| `--model` | Preferred Ollama model tag | `qwen3.5:4b` |
 | `--ollama-url` | Base URL for the Ollama API | `http://localhost:11434` |
 | `--apikey` | API Key for the request (x-api-key header) | `None` |
 | `--workdir` | Base directory for file-based tools | `cwd` |
