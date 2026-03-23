@@ -159,6 +159,22 @@ class AgentApp(App):
     #process_list {
         color: $text-muted;
         padding-left: 1;
+        margin-top: 0;
+    }
+
+    .info_row {
+        padding-left: 1;
+        height: 1;
+    }
+
+    .info_label {
+        color: dim;
+        width: 10;
+    }
+
+    .info_value {
+        color: cyan;
+        text-style: bold;
     }
     """
 
@@ -179,13 +195,50 @@ class AgentApp(App):
                 yield Static("✅ IDLE", id="status_bar")
                 yield Input(placeholder="Ask Superior Agent... (type /help for commands)", id="chat_input")
                 
-            # Sidebar for Artifacts/Plan/Processes
+            # Sidebar for Technical Information
             with Vertical(id="sidebar"):
                 with VerticalScroll(id="sidebar_scroll"):
-                    yield Static("BACKGROUND PROCESSES", classes="sidebar_header")
+                    yield Static("AGENT INFO", classes="sidebar_header")
+                    with Vertical(classes="info_section"):
+                        with Horizontal(classes="info_row"):
+                            yield Static("Model:", classes="info_label")
+                            yield Static("-", id="info_model", classes="info_value")
+                        with Horizontal(classes="info_row"):
+                            yield Static("Mode:", classes="info_label")
+                            yield Static("-", id="info_mode", classes="info_value")
+                        with Horizontal(classes="info_row"):
+                            yield Static("Session:", classes="info_label")
+                            yield Static("-", id="info_session", classes="info_value")
+                        with Horizontal(classes="info_row"):
+                            yield Static("Context:", classes="info_label")
+                            yield Static("-", id="info_context", classes="info_value")
+                    
+                    yield Static("\nRESOURCES", classes="sidebar_header")
+                    with Vertical(classes="info_section"):
+                        with Horizontal(classes="info_row"):
+                            yield Static("Memory:", classes="info_label")
+                            yield Static("-", id="info_memory", classes="info_value")
+                        with Horizontal(classes="info_row"):
+                            yield Static("Tools:", classes="info_label")
+                            yield Static("-", id="info_tools", classes="info_value")
+                        with Horizontal(classes="info_row"):
+                            yield Static("Artifacts:", classes="info_label")
+                            yield Static("-", id="info_artifacts", classes="info_value")
+
+                    yield Static("\nENVIRONMENT", classes="sidebar_header")
+                    with Vertical(classes="info_section"):
+                        with Horizontal(classes="info_row"):
+                            yield Static("OS:", classes="info_label")
+                            yield Static("-", id="info_os", classes="info_value")
+                        with Horizontal(classes="info_row"):
+                            yield Static("Shell:", classes="info_label")
+                            yield Static("-", id="info_shell", classes="info_value")
+                        with Horizontal(classes="info_row"):
+                            yield Static("Workdir:", classes="info_label")
+                            yield Static("-", id="info_workdir", classes="info_value")
+
+                    yield Static("\nBACKGROUND PROCESSES", classes="sidebar_header")
                     yield Static("_None_", id="process_list")
-                    yield Static("\n---\n", classes="sidebar_sep")
-                    yield TMarkdown("# Tasks / Plan\n_No tasks or plans yet._", id="sidebar_content")
                 
         yield Footer()
 
@@ -220,37 +273,48 @@ class AgentApp(App):
         )
 
     def _update_sidebar(self) -> None:
-        # Load 'tasks' or 'implementation_plan' from artifacts
-        tasks_content = self.artifacts.get("tasks")
-        plan_content = self.artifacts.get("implementation_plan")
+        # 1. Agent Info
+        self.query_one("#info_model", Static).update(self.brain.llm.model)
+        self.query_one("#info_mode", Static).update(self.brain.current_template)
+        self.query_one("#info_session", Static).update(self.artifacts.session_id)
         
-        md_text = ""
-        if tasks_content:
-            md_text += tasks_content + "\n\n---\n\n"
-        if plan_content:
-            md_text += plan_content
-            
-        # Also check for 'implementation' if 'implementation_plan' is missing (backward compatibility during transition)
-        if not plan_content:
-            legacy_plan = self.artifacts.get("implementation")
-            if legacy_plan:
-                md_text += legacy_plan
-            
-        if not md_text:
-            md_text = "*No active tasks or plans.*"
-            
-        sidebar = self.query_one("#sidebar_content", TMarkdown)
-        sidebar.update(md_text)
+        try:
+            stats = self.brain.get_context_stats()
+            self.query_one("#info_context", Static).update(f"{stats['used']} / {stats['max']}")
+        except Exception:
+            self.query_one("#info_context", Static).update("Unknown")
 
-        # Update process list
+        # 2. Resources
+        self.query_one("#info_memory", Static).update(f"{self.brain.memory.size} turns")
+        
+        active_cnt = len(self.brain.active_tools)
+        total_cnt = len(self.brain.registry.list_all())
+        self.query_one("#info_tools", Static).update(f"{active_cnt} active / {total_cnt} total")
+        
+        art_cnt = len(self.artifacts.list_all())
+        self.query_one("#info_artifacts", Static).update(f"{art_cnt} found")
+
+        # 3. Environment
+        pp = self.brain.platform
+        self.query_one("#info_os", Static).update(pp.os_name)
+        self.query_one("#info_shell", Static).update(pp.shell)
+        
+        # Truncate workdir if too long
+        wd = pp.work_dir
+        if len(wd) > 25:
+            wd = "..." + wd[-22:]
+        self.query_one("#info_workdir", Static).update(wd)
+
+        # 4. Background Processes
         proc_list = self.query_one("#process_list", Static)
         if not self.brain.processes:
             proc_list.update("_None_")
         else:
             lines = []
-            for pid, cmd in self.brain.processes.items():
+            for pid, info in self.brain.processes.items():
+                cmd = info.get("command", "unknown")
                 # Shorten command if too long
-                display_cmd = cmd[:30] + "..." if len(cmd) > 30 else cmd
+                display_cmd = cmd[:20] + "..." if len(cmd) > 20 else cmd
                 lines.append(f"• [bold cyan]{pid}[/bold cyan]: {display_cmd}")
             proc_list.update("\n".join(lines))
 

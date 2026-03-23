@@ -107,7 +107,7 @@ _TIER_SCHEMA = {
     "required": ["tier", "rationale", "requires_tool"],
 }
 
-_MAX_TOOL_ROUNDS = 20
+_MAX_TOOL_ROUNDS = 30
 
 
 # ------------------------------------------------------------------
@@ -160,6 +160,12 @@ class Brain:
         self.memory.clear()
         self.state = AgentState.IDLE
         self.active_tools = set(TEMPLATES[self.current_template].initial_tools)
+
+    def get_context_stats(self) -> dict[str, int]:
+        """Return token usage for the current conversation state."""
+        messages = self._build_messages("")
+        stats = self.llm.get_context_stats(messages)
+        return {"used": stats.used_tokens, "max": stats.max_tokens}
 
     def switch_template(self, name: str) -> bool:
         """Switch to a different agent template."""
