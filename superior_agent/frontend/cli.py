@@ -23,7 +23,7 @@ from rich.text import Text
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.widgets import Header, Footer, Input, Static, Markdown as TMarkdown
+from textual.widgets import Header, Footer, Input, Static, LoadingIndicator, Markdown as TMarkdown
 from textual.suggester import SuggestFromList
 from textual import work
 
@@ -46,8 +46,6 @@ _STATE_ICONS = {
 _TIPS = [
     "The agent can search for more tools using [bold cyan]search_tools[/bold cyan].",
     "Switch templates with [bold green]/template <name>[/bold green] (Coding, Research, etc).",
-    "Session memory is preserved across turns for context.",
-    "High-complexity tasks use tiered reasoning automatically.",
     "Check [bold yellow]README.md[/bold yellow] for tool development guides.",
     "Background processes are tracked in the sidebar.",
     "All tools are lazy-loaded only when actually needed.",
@@ -103,10 +101,14 @@ class AgentApp(App):
         dock: bottom;
     }
     
-    #status_bar {
+    #status_area {
         height: 1;
-        dock: bottom;
         background: $boost;
+        width: 100%;
+        dock: bottom;
+    }
+
+    #status_bar {
         color: $text-muted;
         padding: 0 1;
     }
@@ -207,6 +209,15 @@ class AgentApp(App):
         color: $text-muted;
         text-style: italic;
     }
+
+    #working_indicator {
+        dock: right;
+        width: 15;
+        height: 1;
+        background: transparent;
+        color: $accent;
+        display: none;
+    }
     """
 
     def __init__(self, brain: Any, artifact_ctrl: Any) -> None:
@@ -223,7 +234,9 @@ class AgentApp(App):
             # Main Chat Area
             with Vertical(id="chat_area"):
                 yield VerticalScroll(id="chat_history")
-                yield Static("✅ IDLE", id="status_bar")
+                with Horizontal(id="status_area"):
+                    yield Static("✅ IDLE", id="status_bar")
+                    yield LoadingIndicator(id="working_indicator")
                 commands = ["/exit", "/help", "/reset", "/tools", "/memory", "/artifacts", "/template", "/debug"]
                 yield Input(
                     placeholder="Ask Superior Agent... (type /help for commands)", 
@@ -392,6 +405,7 @@ class AgentApp(App):
         
         # Lock input and process
         inp.disabled = True
+        self.query_one("#working_indicator").display = True
         self._current_thinking = None
         self._current_response = None
         
@@ -409,6 +423,7 @@ class AgentApp(App):
 
     def _finish_loop(self) -> None:
         self.query_one("#chat_input").disabled = False
+        self.query_one("#working_indicator").display = False
         self.query_one("#chat_input").focus()
         self._update_sidebar(new_tip=True)
 
@@ -532,6 +547,7 @@ class AgentApp(App):
             else:
                 debug_md += "**Last Raw Part:** None\n"
             
+            # self.query_one("#debug_content", TMarkdown).update(debug_md)
             self._append_message("agent_response", Markdown(debug_md))
             
         elif c == "/reset":

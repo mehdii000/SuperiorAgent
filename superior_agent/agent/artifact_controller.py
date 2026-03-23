@@ -24,7 +24,7 @@ class ArtifactController:
         root = root or _DEFAULT_ROOT
         root.mkdir(parents=True, exist_ok=True)
         self._db_path = root / f"{session_id}.db"
-        self._conn = sqlite3.connect(str(self._db_path))
+        self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._create_tables()
         self._ensure_defaults()

@@ -97,16 +97,6 @@ _TIER_CONFIGS: dict[Tier, dict[str, Any]] = {
     Tier.COMPLEX: {"options": {"temperature": 0.5, "top_p": 0.95, "num_ctx": 16384}, "enable_thinking": True},
 }
 
-_TIER_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "tier": {"type": "string", "enum": ["trivial", "moderate", "complex"]},
-        "rationale": {"type": "string"},
-        "requires_tool": {"type": "boolean"},
-    },
-    "required": ["tier", "rationale", "requires_tool"],
-}
-
 _MAX_TOOL_ROUNDS = 30
 
 
@@ -135,23 +125,9 @@ class Brain:
     async def decide(self, user_input: str) -> AsyncIterator[LLMEvent]:
         self.memory.add("user", user_input)
 
-        # Step 1: Classify
-        self._set_state(AgentState.CLASSIFYING)
-        yield LLMEvent(type=EventType.STATE_CHANGE, new_state="classifying",
-                       content="Analysing task complexity…")
-
-        tier = await self._classify_tier(user_input)
-
-        yield LLMEvent(type=EventType.STATE_CHANGE, new_state="classified",
-                       content=f"Tier={tier.tier.value}  requires_tool={tier.requires_tool}  ({tier.rationale})")
-
-        # Step 2: Route
-        if tier.tier == Tier.TRIVIAL and not tier.requires_tool:
-            async for ev in self._handle_trivial(user_input):
-                yield ev
-        else:
-            async for ev in self._handle_agentic(user_input, tier):
-                yield ev
+        # Skip classification and always go agentic (Always-Agentic Approach)
+        async for ev in self._handle_agentic(user_input):
+            yield ev
 
         self._set_state(AgentState.IDLE)
         yield LLMEvent(type=EventType.STATE_CHANGE, new_state="idle", content="Done")
@@ -198,31 +174,16 @@ class Brain:
         self.processes.clear()
 
     # ------------------------------------------------------------------
-    # Trivial handler — stream text, no tools
-    # ------------------------------------------------------------------
-
-    async def _handle_trivial(self, user_input: str) -> AsyncIterator[LLMEvent]:
-        self._set_state(AgentState.STREAMING)
-        yield LLMEvent(type=EventType.STATE_CHANGE, new_state="streaming",
-                       content="Streaming response (no tools)…")
-
-        messages = self._build_messages(user_input)
-        full = ""
-        async for ev in self.llm.stream_response(messages, options=_TIER_CONFIGS[Tier.TRIVIAL]["options"]):
-            if ev.type == EventType.RESPONSE_CHUNK:
-                full += ev.content
-            yield ev
-
-        self.memory.add("agent", full)
-
-    # ------------------------------------------------------------------
     # Agentic handler — non-streaming tool loop + final streamed response
     # ------------------------------------------------------------------
 
-    async def _handle_agentic(self, user_input: str, decision: TierDecision) -> AsyncIterator[LLMEvent]:
-        cfg = _TIER_CONFIGS[decision.tier]
+    async def _handle_agentic(self, user_input: str, decision: TierDecision | None = None) -> AsyncIterator[LLMEvent]:
+        # Default to MODERATE if not specified
+        tier = decision.tier if decision else Tier.MODERATE
+        cfg = _TIER_CONFIGS[tier]
         messages = self._build_messages(user_input)
         
+        called_tools: set[str] = set() # Track unique (name, args_json) per turn
         round_num = 0
         while round_num < self.max_tool_rounds:
             tools_schemas = self._get_tool_schemas()
@@ -251,6 +212,7 @@ class Brain:
                     tool_calls.append(ev)
                 elif ev.type == EventType.ERROR:
                     yield ev
+                    return # TERMINATE the loop on LLM errors
 
             # --- No tool calls → we have the final response ---
             if not tool_calls:
@@ -272,7 +234,16 @@ class Brain:
             ))
 
             # Execute each tool
+            executed_any = False
             for tc in tool_calls:
+                # Deduplication check
+                tc_key = f"{tc.tool_name}:{json.dumps(tc.tool_args, sort_keys=True)}"
+                if tc_key in called_tools:
+                    logger.warning("Agent is repeating tool call: %s. Skipping to prevent loop.", tc_key)
+                    continue
+                called_tools.add(tc_key)
+                executed_any = True
+
                 # Announce the call
                 self._set_state(AgentState.TOOL_CALL)
                 yield LLMEvent(
@@ -305,6 +276,11 @@ class Brain:
 
                 # Add tool result to messages
                 messages.append(Message(role="tool", content=result, name=tc.tool_name))
+
+            # If the model ONLY emitted redundant tools, stop the loop
+            if not executed_any:
+                logger.warning("No new tool calls executed this round. Stopping turn.")
+                break
 
             round_num += 1
             # Loop → next round (LLM sees tool results)
@@ -362,39 +338,6 @@ class Brain:
             return f"Tool error: {exc}"
 
     # ------------------------------------------------------------------
-    # Complexity classification
-    # ------------------------------------------------------------------
-
-    async def _classify_tier(self, user_input: str) -> TierDecision:
-        tool_names = ", ".join(t.name for t in self.registry.list_all()) or "none"
-        messages = [
-            Message(role="system", content=(
-                "/no_think\n"
-                "You are a task complexity classifier. Respond with JSON only.\n"
-                "Decide the tier and whether tools are required.\n\n"
-                "Rules:\n"
-                "- 'trivial': pure knowledge/conversational (no action needed)\n"
-                "- 'moderate': 1-3 steps, likely needs tools\n"
-                "- 'complex': multi-step, definitely needs tools and planning\n"
-                "- ANY request involving files, directories, or system commands → requires_tool=true\n"
-                "- ANY request for real-time information (time, weather, search) → requires_tool=true\n"
-                "- Only pure questions with no action → requires_tool=false\n\n"
-                f"Available core tools: {tool_names} (Note: Agent can search for more tools if needed)"
-            )),
-            Message(role="user", content=user_input),
-        ]
-        try:
-            data = await self.llm.one_shot(messages, format=_TIER_SCHEMA, options={"temperature": 0.3})
-            return TierDecision(
-                tier=Tier(data.get("tier", "moderate")),
-                rationale=data.get("rationale", ""),
-                requires_tool=data.get("requires_tool", True),
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Classification failed: %s", exc)
-            return TierDecision(tier=Tier.MODERATE, rationale=f"Failed: {exc}", requires_tool=True)
-
-    # ------------------------------------------------------------------
     # Message building
     # ------------------------------------------------------------------
 
@@ -407,21 +350,28 @@ class Brain:
 
     def _system_prompt(self) -> str:
         tpl = TEMPLATES[self.current_template]
-        tool_list = self._get_active_tool_metadata()
-        tool_desc = "\n".join(f"  - {t.name}: {t.description}" for t in tool_list) or "  (none)"
+        active_list = self._get_active_tool_metadata()
+        active_desc = "\n".join(f"  - {t.name}: {t.description}" for t in active_list) or "  (none)"
+
+        # Full catalog (lightweight)
+        all_tools = self.registry.list_all()
+        catalog_desc = "\n".join(f"  - {t.name}: {t.description}" for t in all_tools) or "  (none)"
 
         return (
             f"{tpl.system_prompt_prefix}\n\n"
             "## CRITICAL RULES\n"
             "1. You are an AGENT. When asked to do something, DO IT with tools. "
             "Never ask for confirmation.\n"
-            "2. **IMPORTANTE**: You do NOT have all tools loaded by default. If you need a tool to accomplish a task (e.g., getting the time, weather, web search, git, math) and you don't see it in your core Tools list below, you MUST use the `search_tools` function to find and activate it. Do NOT say 'I cannot do that' until you have tried `search_tools`.\n"
+            "2. **HYBRID TOOL LOADING**: You see a list of ALL available tools in the 'Complete Tool Catalog' below. "
+            "However, only those in the 'Currently ACTIVE Tool Schemas' are ready for direct calling. "
+            "If you need a tool from the Catalog that is NOT in the Active list, you MUST call `search_tools(query='tool_name')` first to load its full parameters into your next turn.\n"
             "3. After completing tool calls, write a brief summary of what you did.\n"
             "4. Do NOT call the same tool twice with identical arguments.\n\n"
             f"## Environment\n"
             f"- OS: {self.platform.os_name} | Shell: {self.platform.shell}\n"
             f"- Working directory: {self.platform.work_dir}\n\n"
-            f"## Currently Active Tools\n{tool_desc}\n\n"
+            f"## Currently ACTIVE Tool Schemas (Ready to call)\n{active_desc}\n\n"
+            f"## Complete Tool Catalog (Awareness only)\n{catalog_desc}\n\n"
             "All paths are relative to working directory unless absolute.\n"
         )
 

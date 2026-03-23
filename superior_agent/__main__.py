@@ -8,12 +8,12 @@ import logging
 import sys
 from pathlib import Path
 
-from superior_agent.core.llm_bridge import LLMBridge
-from superior_agent.core.context_manager import ContextManager
-from superior_agent.agent.brain import Brain, detect_platform
-from superior_agent.agent.registry import Registry
-from superior_agent.agent.artifact_controller import ArtifactController
-from superior_agent.frontend.cli import CLI
+from .core.llm_bridge import LLMBridge
+from .core.context_manager import ContextManager
+from .agent.brain import Brain, detect_platform
+from .agent.registry import Registry
+from .agent.artifact_controller import ArtifactController
+from .frontend.cli import CLI
 
 
 def parse_args() -> argparse.Namespace:
@@ -60,6 +60,8 @@ def main() -> None:
     level = logging.DEBUG if args.debug else logging.WARNING
     logging.basicConfig(
         level=level,
+        filename="superior_agent.log",
+        filemode="a",
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
