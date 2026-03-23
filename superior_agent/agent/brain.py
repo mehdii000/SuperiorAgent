@@ -93,8 +93,8 @@ class AgentState(enum.Enum):
 
 _TIER_CONFIGS: dict[Tier, dict[str, Any]] = {
     Tier.TRIVIAL: {"options": {"temperature": 0.7, "top_k": 20}, "enable_thinking": False},
-    Tier.MODERATE: {"options": {"temperature": 0.5, "top_p": 0.95}, "enable_thinking": True},
-    Tier.COMPLEX: {"options": {"temperature": 0.5, "top_p": 0.95}, "enable_thinking": True},
+    Tier.MODERATE: {"options": {"temperature": 0.5, "top_p": 0.95, "num_ctx": 16384}, "enable_thinking": True},
+    Tier.COMPLEX: {"options": {"temperature": 0.5, "top_p": 0.95, "num_ctx": 16384}, "enable_thinking": True},
 }
 
 _TIER_SCHEMA = {

@@ -10,6 +10,7 @@ Provides a full-screen layout with:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from typing import Any
@@ -23,6 +24,7 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Header, Footer, Input, Static, Markdown as TMarkdown
+from textual.suggester import SuggestFromList
 from textual import work
 
 from superior_agent.core.models import EventType, LLMEvent
@@ -40,6 +42,16 @@ _STATE_ICONS = {
     "tool_exec":   ("⚡", "EXECUTING  "),
     "idle":        ("✅", "IDLE       "),
 }
+
+_TIPS = [
+    "The agent can search for more tools using [bold cyan]search_tools[/bold cyan].",
+    "Switch templates with [bold green]/template <name>[/bold green] (Coding, Research, etc).",
+    "Session memory is preserved across turns for context.",
+    "High-complexity tasks use tiered reasoning automatically.",
+    "Check [bold yellow]README.md[/bold yellow] for tool development guides.",
+    "Background processes are tracked in the sidebar.",
+    "All tools are lazy-loaded only when actually needed.",
+]
 
 def strip_ansi(text: str) -> str:
     """Strip ANSI escape codes and control characters."""
@@ -100,7 +112,7 @@ class AgentApp(App):
     }
     
     #sidebar {
-        width: 1fr;
+        width: 0.6fr;
         height: 100%;
         padding: 1;
         background: $panel;
@@ -168,13 +180,32 @@ class AgentApp(App):
     }
 
     .info_label {
-        color: dim;
+        color: dimgrey;
         width: 10;
     }
 
     .info_value {
         color: cyan;
         text-style: bold;
+    }
+
+    #tips_section {
+        background: $boost;
+        color: $text-muted;
+        padding: 1;
+        margin-top: 1;
+        border: dashed $primary-background-lighten-2;
+    }
+    
+    .tip_header {
+        color: $accent;
+        text-style: bold italic;
+        margin-bottom: 1;
+    }
+
+    .tip_text {
+        color: $text-muted;
+        text-style: italic;
     }
     """
 
@@ -193,7 +224,12 @@ class AgentApp(App):
             with Vertical(id="chat_area"):
                 yield VerticalScroll(id="chat_history")
                 yield Static("✅ IDLE", id="status_bar")
-                yield Input(placeholder="Ask Superior Agent... (type /help for commands)", id="chat_input")
+                commands = ["/exit", "/help", "/reset", "/tools", "/memory", "/artifacts", "/template", "/debug"]
+                yield Input(
+                    placeholder="Ask Superior Agent... (type /help for commands)", 
+                    id="chat_input",
+                    suggester=SuggestFromList(commands, case_sensitive=False)
+                )
                 
             # Sidebar for Technical Information
             with Vertical(id="sidebar"):
@@ -239,13 +275,19 @@ class AgentApp(App):
 
                     yield Static("\nBACKGROUND PROCESSES", classes="sidebar_header")
                     yield Static("_None_", id="process_list")
+
+                    yield Vertical(
+                        Static("💡 PRO TIP", classes="tip_header"),
+                        Static("Use /tools to see what I can do!", id="tip_text", classes="tip_text"),
+                        id="tips_section"
+                    )
                 
         yield Footer()
 
     def on_mount(self) -> None:
         self.query_one("#chat_input").focus()
         self._append_message("banner", self._get_banner_panel())
-        self._update_sidebar()
+        self._update_sidebar(new_tip=True)
 
     async def on_unmount(self) -> None:
         """Cleanup before exiting."""
@@ -272,7 +314,7 @@ class AgentApp(App):
             padding=(1, 2)
         )
 
-    def _update_sidebar(self) -> None:
+    def _update_sidebar(self, new_tip: bool = False) -> None:
         # 1. Agent Info
         self.query_one("#info_model", Static).update(self.brain.llm.model)
         self.query_one("#info_mode", Static).update(self.brain.current_template)
@@ -318,6 +360,12 @@ class AgentApp(App):
                 lines.append(f"• [bold cyan]{pid}[/bold cyan]: {display_cmd}")
             proc_list.update("\n".join(lines))
 
+        # 5. Tips
+        if new_tip:
+            import random
+            tip = random.choice(_TIPS)
+            self.query_one("#tip_text", Static).update(tip)
+
     async def on_input_submitted(self, message: Input.Submitted) -> None:
         text = message.value.strip()
         if not text:
@@ -332,7 +380,15 @@ class AgentApp(App):
             return
 
         # Show user message
-        self._append_message("user", Text(text))
+        if text.startswith("/"):
+            parts = text.split()
+            cmd_text = Text()
+            cmd_text.append(parts[0], style="bold green")
+            if len(parts) > 1:
+                cmd_text.append(" " + " ".join(parts[1:]), style="cyan")
+            self._append_message("user", cmd_text)
+        else:
+            self._append_message("user", Text(text))
         
         # Lock input and process
         inp.disabled = True
@@ -354,7 +410,7 @@ class AgentApp(App):
     def _finish_loop(self) -> None:
         self.query_one("#chat_input").disabled = False
         self.query_one("#chat_input").focus()
-        self._update_sidebar()
+        self._update_sidebar(new_tip=True)
 
     def _dispatch_event(self, ev: LLMEvent) -> None:
         # We are on the async main UI thread so we can just update directly
@@ -442,8 +498,41 @@ class AgentApp(App):
 - `/memory`: Show recent memory
 - `/artifacts`: List artifacts
 - `/template <name>`: Switch agent template (General, Coding, Research)
+- `/debug`: Show last LLM error and raw response
 """
             self._append_message("agent_response", Markdown(help_md))
+
+        elif c == "/debug":
+            llm = self.brain.llm
+            debug_md = f"### LLM Debug info\n\n"
+            if llm.last_raw_error:
+                debug_md += f"**Last Error:** `{llm.last_raw_error}`\n\n"
+            else:
+                debug_md += "**Last Error:** None\n\n"
+            
+            if llm.last_raw_response:
+                try:
+                    # Robustly handle ollama Response objects (which are often Pydantic models)
+                    data = llm.last_raw_response
+                    if hasattr(data, 'model_dump'):
+                        data = data.model_dump()
+                    elif hasattr(data, 'dict'):
+                        data = data.dict()
+                    elif not isinstance(data, dict):
+                        # Fallback for other objects
+                        data = str(data)
+                        
+                    if isinstance(data, str):
+                        resp_str = data
+                    else:
+                        resp_str = json.dumps(data, indent=2)
+                except Exception as e:
+                    resp_str = f"<Serialization Error: {e}>\n{llm.last_raw_response}"
+                debug_md += f"**Last Raw Part:**\n```json\n{resp_str}\n```\n"
+            else:
+                debug_md += "**Last Raw Part:** None\n"
+            
+            self._append_message("agent_response", Markdown(debug_md))
             
         elif c == "/reset":
             self.brain.reset()

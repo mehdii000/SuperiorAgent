@@ -2,6 +2,9 @@
 
 Superior Agent is a modular, session-aware AI agent designed with tiered reasoning, powered by **Qwen3/Qwen3.5** via **Ollama**. This is a fun hobbyist project exploring the capabilities of autonomous agents in a controlled environment.
 
+> [!IMPORTANT]
+> This is a work in progress. The agent ability to perform complex tasks is limited and unpredictable. It's main purpose is to be a learning tool for me to understand how autonomous agents work and to experiment with different architectures and techniques. The code is not production-ready and should not be used in production.
+
 ## ✨ Key Features
 
 - **Tiered Reasoning**: Efficiently processes tasks using a structured thinking-to-action pipeline.

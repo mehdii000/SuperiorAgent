@@ -65,6 +65,8 @@ class LLMBridge:
         self.max_tokens = max_tokens
         headers = {"x-api-key": api_key} if api_key else None
         self._client = ollama.AsyncClient(host=host, headers=headers)
+        self.last_raw_error: str | None = None
+        self.last_raw_response: Any = None
 
     # ------------------------------------------------------------------
     # Streaming (for user-facing text — NO tools)
@@ -90,6 +92,7 @@ class LLMBridge:
         try:
             response = await self._client.chat(**kwargs)
             async for part in response:
+                self.last_raw_response = part
                 message = part.get("message", {})
 
                 thinking = message.get("thinking")
@@ -104,6 +107,7 @@ class LLMBridge:
                     yield LLMEvent(type=EventType.DONE)
 
         except Exception as exc:  # noqa: BLE001
+            self.last_raw_error = str(exc)
             yield LLMEvent(type=EventType.ERROR, error=str(exc))
 
     # ------------------------------------------------------------------
@@ -132,6 +136,7 @@ class LLMBridge:
         try:
             response = await self._client.chat(**kwargs)
             async for part in response:
+                self.last_raw_response = part
                 message = part.get("message", {})
 
                 thinking = message.get("thinking")
@@ -157,6 +162,7 @@ class LLMBridge:
                     yield LLMEvent(type=EventType.DONE)
 
         except Exception as exc:  # noqa: BLE001
+            self.last_raw_error = str(exc)
             logger.error("stream_chat_with_tools failed: %s", exc)
             yield LLMEvent(type=EventType.ERROR, error=str(exc))
 
